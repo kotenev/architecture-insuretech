@@ -1,0 +1,107 @@
+@startuml InsureTech — Container diagram (TO-BE, Event-Driven)
+!includeurl https://raw.githubusercontent.com/RicardoNiepel/C4-PlantUML/master/C4_Container.puml
+
+title InsureTech — Container diagram (TO-BE, Event-Driven)
+
+top to bottom direction
+
+' --- Акторы и внешние системы ---
+
+Person(client, "Клиент", "Физическое лицо, оформляющее и обслуживающее страховки")
+System_Ext(partner_systems, "B2B-партнёры", "Системы партнёрских компаний, интегрирующие API InsureTech")
+System_Ext(insurance_systems, "Страховые компании", "Внешние ИС страховых компаний (тарифы, андеррайтинг, оформление)")
+System_Ext(payment_service, "Платёжный сервис", "Внешний сервис приёма и обработки платежей")
+
+' --- Граница системы InsureTech ---
+
+System_Boundary(insuretech, "InsureTech") {
+
+    Container(web_app, "Web-приложение", "SPA / Web", "Личный кабинет клиента InsureTech")
+
+    Container(core_app, "core-app", "Java / Spring Boot", "Основной бэкенд: поиск продуктов, расчёт и оформление страховок, партнёрские API")
+
+    Container(client_info, "client-info", "Microservice", "Управление клиентскими профилями и контактными данными")
+
+    Container(product_agg, "ins-product-aggregator", "Microservice", "Агрегация продуктовых каталогов и тарифов от страховых компаний")
+
+    Container(settlement_svc, "ins-comp-settlement", "Microservice", "Взаиморасчёты со страховыми компаниями, формирование реестров")
+
+    ContainerDb(client_db, "Client DB", "PostgreSQL", "Клиентские данные")
+    ContainerDb(core_db, "Core DB", "PostgreSQL", "Заявки, оформленные страховки, локальная реплика продуктов (core-app)")
+    ContainerDb(settlement_db, "Settlement DB", "PostgreSQL", "Данные для взаиморасчётов, витрина оформленных страховок")
+    ContainerDb(product_cache_db, "Product Cache DB", "PostgreSQL", "Кэш/репозиторий продуктов и тарифов в ins-product-aggregator")
+
+    Container(event_bus, "Event Streaming Platform", "Kafka / Yandex Data Streams / аналог", "Единая шина событий: продукты, тарифы, оформленные страховки")
+}
+
+' --- Взаимодействия: фронт и партнёры ---
+
+Rel(client, web_app, "Работает с личным кабинетом", "HTTPS")
+Rel(web_app, core_app, "HTTP API: каталог продуктов, расчёт и оформление страховок", "REST / JSON")
+
+Rel(partner_systems, core_app, "B2B API: оформление и управление страховками", "REST / JSON")
+
+' --- Работа с клиентскими данными ---
+
+Rel(core_app, client_info, "CRUD по клиентам", "REST")
+Rel(client_info, client_db, "Чтение/запись клиентских данных", "SQL")
+
+' --- Данные core-app ---
+
+Rel(core_app, core_db, "Чтение/запись заявок, полисов и реплики продуктов", "SQL")
+
+' --- Взаиморасчёты ---
+
+Rel(settlement_svc, settlement_db, "Чтение/запись данных взаиморасчётов и витрины полисов", "SQL")
+
+' --- Интеграция с платёжным сервисом ---
+
+Rel(core_app, payment_service, "Инициирует и обрабатывает платежи", "REST")
+
+' --- Интеграция с страховыми компаниями через агрегатор ---
+
+Rel(core_app, product_agg, "Первичная загрузка / ручная ресинхронизация каталога продуктов и тарифов", "REST")
+Rel(settlement_svc, product_agg, "Редкие / резервные запросы по продуктам и тарифам", "REST")
+
+Rel(product_agg, insurance_systems, "Запросы тарифов и продуктов от страховых компаний", "REST / SOAP / др.")
+Rel(product_agg, product_cache_db, "Хранение локального кэша продуктового каталога", "SQL")
+
+' --- Event-Driven: каталог продуктов и тарифов ---
+
+Rel(product_agg, event_bus, "Публикует события изменений продуктов и тарифов (ProductCreated/Updated, TariffChanged)", "Event Streaming")
+
+Rel(event_bus, core_app, "Подписка на события Product*/Tariff* для обновления локальной реплики каталога", "Event Streaming")
+Rel(event_bus, settlement_svc, "Подписка на события Product*/Tariff* для расчётов и отчётности", "Event Streaming")
+
+' --- Event-Driven: оформление и изменение страховок ---
+
+Rel(core_app, event_bus, "Публикует события PolicyIssued/Updated/Cancelled", "Event Streaming")
+Rel(event_bus, settlement_svc, "Подписка на события Policy* и актуализация витрины оформленных страховок", "Event Streaming")
+
+' --- Отказ от ночного REST core-app → ins-comp-settlement ---
+
+' Ранее:
+' Rel(settlement_svc, core_app, "Ночная выгрузка оформленных за день страховок", "REST")
+' Сейчас данные поступают в settlement_svc через события Policy* в Event Streaming Platform.
+
+' --- Замечания по Transactional Outbox ---
+
+Note right of core_app
+  Transactional Outbox (core-app):
+  • при изменении полисов core-app
+    записывает данные и запись в таблицу outbox
+    в одной транзакции;
+  • фоновый процесс читает outbox и
+    публикует события Policy* в Event Streaming Platform.
+end note
+
+Note right of product_agg
+  Transactional Outbox (ins-product-aggregator):
+  • при изменении кэша продуктов/тарифов
+    фиксируются изменения и события Product*/Tariff*
+    в одной транзакции;
+  • воркер читает outbox и публикует
+    события в Event Streaming Platform.
+end note
+
+@enduml
