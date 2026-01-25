@@ -1,0 +1,64 @@
+@startuml
+!includeurl https://raw.githubusercontent.com/RicardoNiepel/C4-PlantUML/master/C4_Container.puml
+
+title Container diagram for InsureTech (AS-IS)
+
+top to bottom direction
+
+' --- Актор и внешние системы ---
+
+Person(client, "Клиент", "Клиент InsureTech, оформляющий и обслуживающий страховые продукты")
+System_Ext(partner_systems, "Системы партнёров", "Системы партнёров, интегрирующие страховые услуги в свои продукты")
+System_Ext(insurance_systems, "Системы страховых компаний", "Системы страховых компаний, предоставляющие API для тарифов, андерайтинга и оформления страховых продуктов")
+System_Ext(payment_service, "Платёжный сервис", "Внешний платёжный сервис, через который осуществляется оплата страховок. Деньги уходят на счета страховых компаний")
+
+' --- Граница системы InsureTech ---
+
+System_Boundary(insuretech, "InsureTech Prod") {
+
+  Container(web_app, "InsureTech Web", "JavaScript, React", "Веб-приложение InsureTech для клиентов и партнёров")
+
+  Container(core_app, "core-app", "Kotlin, Spring Boot", "Монолитное приложение: показывает доступные страховые продукты, оформляет новые страховки и отображает информацию о купленных страховках")
+
+  Container(product_agg, "ins-product-aggregator", "Kotlin, Spring Boot", "Сервис для интеграции со страховыми компаниями; агрегирует информацию по страховым продуктам и предоставляет единый API для core-app")
+
+  Container(settlement_svc, "ins-comp-settlement", "Kotlin, Spring Boot", "Сервис для осуществления взаиморасчётов со страховыми компаниями")
+
+  Container(client_info, "client-info", "Kotlin, Spring Boot", "Сервис для учёта клиентских данных (профиль, контакты, идентификаторы)")
+
+  ContainerDb(core_db, "core-db", "PostgreSQL", "Хранит тарифы страховых компаний и заявки клиентов на страховые продукты")
+
+  ContainerDb(settlement_db, "ins-comp-settlement-db", "PostgreSQL", "Хранит данные об оформленных страховках и условиях взаиморасчётов с клиентами")
+
+  ContainerDb(client_db, "client-db", "PostgreSQL", "Хранит клиентские данные: ФИО, телефон, паспортные данные и т.п. для оформления страховок")
+}
+
+' --- Связи: пользователь и фронтенд ---
+
+Rel(client, web_app, "Использует веб-приложение InsureTech", "HTTPS")
+
+' --- Связи внутри InsureTech ---
+
+Rel(web_app, core_app, "Оформление страховок, получение тарифов, просмотр статусов", "HTTPS/REST")
+Rel(web_app, client_info, "Получение и обновление информации о клиенте", "HTTPS/REST")
+Rel(web_app, payment_service, "Проведение оплаты за страховки (redirect)", "HTTP")
+
+Rel(core_app, core_db, "Читает и записывает данные тарифов, заявок и полисов", "TCP")
+Rel(core_app, product_agg, "Получение тарифов и создание заявок на страховки", "REST")
+Rel(core_app, settlement_svc, "Передаёт информацию об оформленных страховках для взаиморасчётов", "REST")
+Rel(core_app, client_info, "Получает и обновляет клиентские данные", "REST")
+Rel(core_app, payment_service, "Инициирует проведение оплаты за страховки", "HTTP")
+
+Rel(product_agg, insurance_systems, "Получает информацию по продуктам и тарифам от страховых компаний", "REST / SOAP / GraphQL")
+
+Rel(settlement_svc, settlement_db, "Читает и записывает данные для взаиморасчётов", "TCP")
+Rel(settlement_svc, insurance_systems, "Обменивается данными для взаиморасчётов со страховыми компаниями", "REST / SOAP / GraphQL")
+Rel(settlement_svc, product_agg, "Получает информацию о продуктах и тарифах для взаиморасчётов", "REST")
+
+Rel(client_info, client_db, "Читает и записывает клиентские данные", "TCP")
+
+' --- Связи с партнёрами ---
+
+Rel(partner_systems, core_app, "Получает информацию по продуктам и тарифам, оформляет страховки", "REST")
+
+@enduml
